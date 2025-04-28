@@ -1,6 +1,8 @@
 import { getAppUrl } from "@/lib/helper/url";
 import prisma from "@/lib/prisma";
 import { WorkflowStatus } from "@/types/workflow";
+import { executeWorkflow } from "@/actions/workflow";
+
 export async function GET(req: Request) {
     const now = new Date();
     const workflows = await prisma.workflow.findMany({
@@ -11,37 +13,18 @@ export async function GET(req: Request) {
             nextRunAt: { lte: now },
         }
     });
-      for (const workflow of workflows) {
-        triggerWorkflow(workflow.id);
-      }
-    return Response.json({workflowsToRun:workflows.length},{status:200});
+
+    const results = await Promise.allSettled(
+        workflows.map(workflow => executeWorkflow(workflow.id))
+    );
+
+    const successfulExecutions = results.filter(
+        result => result.status === 'fulfilled'
+    ).length;
+
+    return Response.json({
+        totalWorkflows: workflows.length,
+        successfulExecutions,
+        failedExecutions: workflows.length - successfulExecutions
+    }, { status: 200 });
 }
-
-async function  triggerWorkflow(workflowId: string) {
-    const triggerApiUrl = getAppUrl(`api/workflows/execute?workflowId=${workflowId}`);
-
-  
-    return fetch(triggerApiUrl, {
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${process.env.API_SECRET}`,
-        "Content-Type": "application/json"
-      },
-      cache: "no-cache",
-    })
-    .then(response => {
-      if (!response.ok) {
-        console.error(`Error response: ${response.status} ${response.statusText}`);
-        return response.text().then(text => {
-          console.error("Response body:", text);
-          throw new Error(`Request failed with status ${response.status}`);
-        });
-      }
-      console.log(`Successfully triggered workflow: ${workflowId}`);
-      return response;
-    })
-    .catch(error => {
-      console.error(`Error triggering workflow with id ${workflowId}:`, error.message);
-      throw error;
-    });
-  }
